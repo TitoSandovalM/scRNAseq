@@ -1,0 +1,69 @@
+#SCRIPT FOR scRNAseq
+library(dplyr)
+library(Seurat)
+#install.packages("Seurat")
+library(ggplot2)
+
+# Load the dataset
+setwd("~/Documents/Cornell data/Deferiprone/single cell seq/raw_gene_bc_matrices")
+# Initialize the Seurat object with the raw (non-normalized data).
+scbecon.data<-Read10X(data.dir = "~/Documents/Cornell data/Deferiprone/single cell seq/raw_gene_bc_matrices")
+scbecon<-CreateSeuratObject(counts=scbecon.data, project="scbecon", min.cells=3, min.features=200)
+scbecon
+#Standard pre-processing workflow
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+scbecon[["percent.mt"]]<-PercentageFeatureSet(object=scbecon, pattern = "^mt-")
+head(x=scbecon@meta.data, 5)
+# Visualize QC metrics as a violin plot
+VlnPlot(object = scbecon, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+plot1 <- FeatureScatter(object = scbecon, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(object = scbecon, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2))
+scbecon <- subset(x = scbecon, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+#normalizing data
+scbecon <- NormalizeData(object = scbecon, normalization.method = "LogNormalize", scale.factor = 10000)
+scbecon<-NormalizeData(object = scbecon)
+#Identification of highly variable features (feature selection)
+scbecon <- FindVariableFeatures(object = scbecon, selection.method = "vst", nfeatures = 2000)
+# Identify the 10 most highly variable genes
+top10<-head(x=VariableFeatures(object = scbecon),10)
+# plot variable features with and without labels
+plot1<-VariableFeaturePlot(object = scbecon)
+plot2<-LabelPoints(plot=plot1, points = top10, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+#Scaling the data
+all.genes<-rownames(x=scbecon)
+scbecon<-ScaleData(object = scbecon, features = all.genes)
+#Perform linear dimensional reduction
+scbecon <- RunPCA(object = scbecon, features = VariableFeatures(object = scbecon))
+# Examine and visualize PCA results a few different ways
+print(x = scbecon[["pca"]], dims = 1:5, nfeatures = 5)
+VizDimLoadings(object = scbecon, dims = 1:2, reduction = "pca")
+DimPlot(object = scbecon, reduction = "pca")
+DimHeatmap(object = scbecon, dims = 1, cells = 500, balanced = TRUE)
+DimHeatmap(object = scbecon, dims = 1:15, cells = 500, balanced = TRUE)
+#export figure
+pdf("heatmap_PC.pdf", width = 8, height = 8)
+DimHeatmap(object = scbecon, dims = 1:15, cells = 500, balanced = TRUE)
+dev.off()
+#Determine the ‘dimensionality’ of the dataset
+scbecon<-JackStraw(object = scbecon, num.replicate = 100)
+scbecon<-ScoreJackStraw(object = scbecon, dims=1:20)
+JackStrawPlot(object = scbecon, dims = 1:20)
+ElbowPlot(object = scbecon)
+#Cluster the cells
+scbecon<-FindNeighbors(object = scbecon,dims = 1:20)
+scbecon<-FindClusters(object = scbecon, resolution =0.25)
+## Look at cluster IDs of the first 5 cells
+head(x=Idents(object = scbecon),5)
+#Run non-linear dimensional reduction (UMAP/tSNE)
+scbecon<-RunUMAP(object=scbecon,dims = 1:10)
+DimPlot(object=scbecon,reduction = "umap")
+saveRDS(scbecon, file = "~/Documents/Data Tito/Deferiprone/single cell seq/raw_gene_bc_matrices/scbecon.rds")
+#Finding differentially expressed features (cluster biomarkers)
+scbecon.markers<-FindAllMarkers(object = scbecon, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+scbecon.markers%>% group_by(cluster) %>%top_n(n=10,avg_logFC)
+#export table of genes by cluster
+write.csv(scbecon.markers, file = "scbecon_markers_resolution0.25.csv", row.names = FALSE, na="")
